@@ -144,7 +144,7 @@ export const SyncProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const remoteArchives: ArchiveDocument[] = [];
             snapshot.forEach((d) => {
               const data = d.data() as ArchiveDocument;
-              if (data) {
+              if (data && (data.title || data.fileName) && (data.uploaderName || data.uploaderNip)) {
                 remoteArchives.push({
                   ...data,
                   id: data.id || d.id

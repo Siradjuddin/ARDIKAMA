@@ -104,8 +104,8 @@ export function getASNStatus(emp: { nip?: string; statusASN?: 'ASN' | 'NON_ASN' 
  * Converts Base64 data URLs into Blob URLs so modern browsers can render or view the PDF without blocking.
  */
 export function openDocumentLink(url: string, fileName?: string): void {
-  if (!url) {
-    alert('Link dokumen tidak tersedia.');
+  if (!url || url.trim() === '') {
+    alert('Link dokumen tidak tersedia. Pastikan Google Drive terhubung atau unggah ulang dokumen ini.');
     return;
   }
 
