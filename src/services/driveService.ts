@@ -24,12 +24,16 @@ try {
     (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
-        if (data?.accessToken) {
+        if (data?.accessToken && !data?.expired) {
           cachedAccessToken = data.accessToken;
           localStorage.setItem('ardika_shared_gdrive_token', data.accessToken);
           if (data.driveEmail) {
             localStorage.setItem('ardika_shared_gdrive_email', data.driveEmail);
           }
+        } else {
+          cachedAccessToken = null;
+          localStorage.removeItem('ardika_gdrive_token');
+          localStorage.removeItem('ardika_shared_gdrive_token');
         }
       }
     },
@@ -171,6 +175,11 @@ export const getCachedAccessTokenAsync = async (): Promise<string | null> => {
           localStorage.setItem('ardika_shared_gdrive_email', data.driveEmail);
         }
         return cachedAccessToken;
+      } else {
+        cachedAccessToken = null;
+        localStorage.removeItem('ardika_gdrive_token');
+        localStorage.removeItem('ardika_shared_gdrive_token');
+        return null;
       }
     }
   } catch (e) {

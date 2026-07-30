@@ -92,6 +92,31 @@ export const SyncProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [driveFileCount, setDriveFileCount] = useState<number | null>(null);
   const [isDriveConnectedState, setIsDriveConnectedState] = useState<boolean>(() => isDriveConnected());
 
+  // Realtime synchronization for Google Drive connection state across all devices & browsers
+  useEffect(() => {
+    try {
+      const unsub = onSnapshot(
+        doc(db, 'settings', 'gdrive'),
+        (snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            if (data?.accessToken && !data?.expired) {
+              setIsDriveConnectedState(true);
+              refreshDriveCount();
+            } else {
+              setIsDriveConnectedState(false);
+              setDriveFileCount(null);
+            }
+          }
+        },
+        (err) => console.warn('GDrive settings realtime listener notice:', err)
+      );
+      return () => unsub();
+    } catch (e) {
+      console.warn('GDrive settings realtime listener notice:', e);
+    }
+  }, []);
+
   const refreshDriveCount = async () => {
     const count = await fetchArdikamaDriveCount();
     if (count !== null) {
@@ -146,10 +171,10 @@ export const SyncProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       }
     }
-    if (typeof clean.fileUrl === 'string' && clean.fileUrl.length > 100000) {
+    if (typeof clean.fileUrl === 'string' && clean.fileUrl.length > 800000) {
       clean.fileUrl = '';
     }
-    if (typeof clean.driveUrl === 'string' && clean.driveUrl.length > 100000) {
+    if (typeof clean.driveUrl === 'string' && clean.driveUrl.length > 800000) {
       clean.driveUrl = 'https://drive.google.com/drive/my-drive';
     }
     return clean;
