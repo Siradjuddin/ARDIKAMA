@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useSync } from '../context/SyncContext';
 import { getAllEmployees } from '../data/employees';
-import { maskNip } from '../utils/formatters';
+import { maskNip, openDocumentLink } from '../utils/formatters';
 import { TabType } from './Sidebar';
 import {
   BarChart,
@@ -498,15 +498,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateTab, onOpenUploa
                     </div>
                   )}
 
-                  <a
-                    href={doc.driveUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold flex items-center gap-1.5"
+                  <button
+                    onClick={() => openDocumentLink(doc.driveUrl, doc.fileName)}
+                    className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition-colors"
                   >
-                    <span>Google Drive</span>
+                    <span>{doc.driveUrl?.startsWith('http') ? 'Google Drive' : 'Lihat Berkas'}</span>
                     <ExternalLink className="w-3.5 h-3.5" />
-                  </a>
+                  </button>
                 </div>
               </div>
 
