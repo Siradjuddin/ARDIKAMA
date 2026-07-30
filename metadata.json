@@ -1,0 +1,6 @@
+{
+  "name": "ARDIKAMA - Arsip Digital Kemenag Mempawah",
+  "description": "Sistem Manajemen Dokumen Terpadu & Monitoring Kedisiplinan Pelaporan Pegawai (LKH, LKB, SPT) Kemenag Kabupaten Mempawah",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

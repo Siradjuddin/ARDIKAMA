@@ -1,0 +1,48 @@
+{
+  "entities": {
+    "ArchiveDocument": {
+      "title": "Archive Document",
+      "description": "Digital archive and report document uploaded by employees",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "fileName": { "type": "string" },
+        "fileSize": { "type": "string" },
+        "fileType": { "type": "string" },
+        "docType": { "type": "string" },
+        "driveUrl": { "type": "string" },
+        "uploadDate": { "type": "string" },
+        "uploadTime": { "type": "string" },
+        "uploaderNip": { "type": "string" },
+        "uploaderName": { "type": "string" },
+        "approvalStatus": { "type": "string" },
+        "rejectionReason": { "type": "string" },
+        "reviewedBy": { "type": "string" },
+        "reviewedAt": { "type": "string" },
+        "syncedToCloud": { "type": "boolean" }
+      },
+      "required": ["id", "title", "uploaderNip"]
+    },
+    "GDriveSetting": {
+      "title": "Google Drive Setting",
+      "description": "Shared Google Drive token configuration for system integration",
+      "type": "object",
+      "properties": {
+        "accessToken": { "type": "string" },
+        "driveEmail": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/archives/{archiveId}": {
+      "schema": "ArchiveDocument",
+      "description": "Stores archives and reports"
+    },
+    "/settings/{settingId}": {
+      "schema": "GDriveSetting",
+      "description": "Stores global app settings"
+    }
+  }
+}
