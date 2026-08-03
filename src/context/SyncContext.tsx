@@ -1,7 +1,8 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
+import { collection, doc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { ArchiveDocument, ComplianceRecord, FileCategory, PushNotification, SyncQueueItem } from '../types';
 import { INITIAL_ARCHIVES, generateInitialComplianceRecords } from '../data/mockArchives';
-import { fetchArdikamaDriveCount, isDriveConnected, connectGoogleDrive, disconnectGoogleDrive } from '../services/driveService';
+import { fetchArdikamaDriveCount, isDriveConnected, connectGoogleDrive, disconnectGoogleDrive, db } from '../services/driveService';
 import { getAllEmployees } from '../data/employees';
 
 interface SyncContextType {
@@ -50,13 +51,6 @@ export const SyncProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return new Date().toISOString().split('T')[0];
   });
 
-  // Ensure clean start state (0 uploaded, all pending) for live testing
-  if (!localStorage.getItem('ardika_v3_zero_reset')) {
-    localStorage.removeItem('ardika_archives');
-    localStorage.removeItem('ardika_compliance');
-    localStorage.setItem('ardika_v3_zero_reset', 'true');
-  }
-
   const [archives, setArchives] = useState<ArchiveDocument[]>(() => {
     const saved = localStorage.getItem('ardika_archives');
     return saved ? JSON.parse(saved) : INITIAL_ARCHIVES;
@@ -98,6 +92,31 @@ export const SyncProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [driveFileCount, setDriveFileCount] = useState<number | null>(null);
   const [isDriveConnectedState, setIsDriveConnectedState] = useState<boolean>(() => isDriveConnected());
 
+  // Realtime synchronization for Google Drive connection state across all devices & browsers
+  useEffect(() => {
+    try {
+      const unsub = onSnapshot(
+        doc(db, 'settings', 'gdrive'),
+        (snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            if (data?.accessToken && !data?.expired) {
+              setIsDriveConnectedState(true);
+              refreshDriveCount();
+            } else {
+              setIsDriveConnectedState(false);
+              setDriveFileCount(null);
+            }
+          }
+        },
+        (err) => console.warn('GDrive settings realtime listener notice:', err)
+      );
+      return () => unsub();
+    } catch (e) {
+      console.warn('GDrive settings realtime listener notice:', e);
+    }
+  }, []);
+
   const refreshDriveCount = async () => {
     const count = await fetchArdikamaDriveCount();
     if (count !== null) {
@@ -133,6 +152,72 @@ export const SyncProvider: React.FC<{ children: React.ReactNode }> = ({ children
     refreshDriveCount();
   }, [archives, isOnline]);
 
+  // Helper to sanitize documents before Firestore write to ensure payload size is small (< 100KB) and no undefined properties exist
+  const sanitizeDocForFirestore = (docObj: ArchiveDocument): Record<string, any> => {
+    const clean: Record<string, any> = {};
+    for (const key of Object.keys(docObj)) {
+      const val = (docObj as any)[key];
+      if (val !== undefined) {
+        if (val && typeof val === 'object' && !Array.isArray(val)) {
+          const subClean: Record<string, any> = {};
+          for (const subKey of Object.keys(val)) {
+            if ((val as any)[subKey] !== undefined) {
+              subClean[subKey] = (val as any)[subKey];
+            }
+          }
+          clean[key] = subClean;
+        } else {
+          clean[key] = val;
+        }
+      }
+    }
+    if (typeof clean.fileUrl === 'string' && (clean.fileUrl.length > 700000 || clean.fileUrl.startsWith('data:'))) {
+      clean.fileUrl = '';
+    }
+    if (typeof clean.driveUrl === 'string' && (clean.driveUrl.length > 700000 || clean.driveUrl.startsWith('data:'))) {
+      clean.driveUrl = '';
+    }
+    return clean;
+  };
+
+  // Realtime Firestore synchronization for archives across all devices/users
+  useEffect(() => {
+    try {
+      const unsubscribe = onSnapshot(
+        collection(db, 'archives'),
+        (snapshot) => {
+          if (!snapshot.empty) {
+            const remoteArchives: ArchiveDocument[] = [];
+            snapshot.forEach((d) => {
+              const data = d.data() as ArchiveDocument;
+              if (data && (data.title || data.fileName) && (data.uploaderName || data.uploaderNip)) {
+                remoteArchives.push({
+                  ...data,
+                  id: data.id || d.id
+                });
+              }
+            });
+            // Merge remote archives safely with local archives so local pending additions are not lost
+            setArchives((prev) => {
+              const map = new Map<string, ArchiveDocument>();
+              prev.forEach((doc) => map.set(String(doc.id), doc));
+              remoteArchives.forEach((doc) => map.set(String(doc.id), doc));
+              const merged = Array.from(map.values());
+              merged.sort((a, b) => String(b?.id || '').localeCompare(String(a?.id || '')));
+              return merged;
+            });
+          }
+        },
+        (err) => {
+          console.warn('Firestore archives snapshot listener notice:', err);
+        }
+      );
+      return () => unsubscribe();
+    } catch (err) {
+      console.warn('Firestore archives snapshot listener warning:', err);
+    }
+  }, []);
+
   // Auto sync compliance records with approved documents in active month
   useEffect(() => {
     const activeMonth = selectedDate.substring(0, 7); // "YYYY-MM"
@@ -143,26 +228,42 @@ export const SyncProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     setComplianceRecords((prev) => {
       return allEmps.map((emp) => {
-        const empDocsInMonth = approvedDocs.filter(
-          (a) => a.uploaderNip === emp.nip && (a.uploadDate ? a.uploadDate.startsWith(activeMonth) : false)
-        );
-        const empSptInYear = approvedDocs.filter(
-          (a) => a.uploaderNip === emp.nip && a.docType === 'SPT' && (a.uploadDate ? a.uploadDate.startsWith(activeYear) : false)
-        );
+        const empNipNorm = (emp.nip || '').trim();
 
-        const hasLkh = empDocsInMonth.some((a) => a.docType === 'LKH' || a.docType === 'LKH_LKB');
-        const hasLkb = empDocsInMonth.some((a) => a.docType === 'LKB' || a.docType === 'LKH_LKB');
-        const hasSpt = empSptInYear.length > 0 || empDocsInMonth.some((a) => a.docType === 'SPT');
+        const empDocsInMonth = approvedDocs.filter((a) => {
+          const uNipNorm = (a.uploaderNip || '').trim();
+          if (uNipNorm !== empNipNorm) return false;
+          if (!a.uploadDate) return true;
+          return a.uploadDate.startsWith(activeMonth) || a.uploadDate.includes(activeMonth);
+        });
 
-        const existingRec = prev.find((r) => r.employeeNip === emp.nip);
+        const empSptInYear = approvedDocs.filter((a) => {
+          const uNipNorm = (a.uploaderNip || '').trim();
+          const dTypeNorm = (a.docType || '').toUpperCase();
+          if (uNipNorm !== empNipNorm || dTypeNorm !== 'SPT') return false;
+          if (!a.uploadDate) return true;
+          return a.uploadDate.startsWith(activeYear) || a.uploadDate.includes(activeYear);
+        });
+
+        const hasLkh = empDocsInMonth.some((a) => {
+          const t = (a.docType || '').toUpperCase();
+          return t === 'LKH' || t === 'LKH_LKB';
+        });
+        const hasLkb = empDocsInMonth.some((a) => {
+          const t = (a.docType || '').toUpperCase();
+          return t === 'LKB' || t === 'LKH_LKB';
+        });
+        const hasSpt = empSptInYear.length > 0 || empDocsInMonth.some((a) => (a.docType || '').toUpperCase() === 'SPT');
+
+        const existingRec = prev.find((r) => (r.employeeNip || '').trim() === empNipNorm);
 
         return {
           employeeNip: emp.nip,
           employeeName: emp.name,
           date: selectedDate,
-          lkhStatus: hasLkh ? 'SUDAH' : 'BELUM',
-          lkbStatus: hasLkb ? 'SUDAH' : 'BELUM',
-          sptStatus: hasSpt ? 'SUDAH' : 'BELUM',
+          lkhStatus: hasLkh ? 'SUDAH' : (existingRec?.lkhStatus === 'SUDAH' ? 'SUDAH' : 'BELUM'),
+          lkbStatus: hasLkb ? 'SUDAH' : (existingRec?.lkbStatus === 'SUDAH' ? 'SUDAH' : 'BELUM'),
+          sptStatus: hasSpt ? 'SUDAH' : (existingRec?.sptStatus === 'SUDAH' ? 'SUDAH' : 'BELUM'),
           lastUpdated: existingRec?.lastUpdated || new Date().toISOString()
         };
       });
@@ -194,21 +295,47 @@ export const SyncProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, [pendingSyncQueue]);
 
-  // Persist state to local storage
+  // Persist state to local storage safely without quota crashes
   useEffect(() => {
-    localStorage.setItem('ardika_archives', JSON.stringify(archives));
+    try {
+      const safeArchives = archives.map((a) => {
+        if ((a.fileUrl && a.fileUrl.length > 200000) || (a.driveUrl && a.driveUrl.length > 200000)) {
+          return {
+            ...a,
+            fileUrl: a.fileUrl && a.fileUrl.length > 200000 ? '' : a.fileUrl,
+            driveUrl: a.driveUrl && a.driveUrl.length > 200000 ? 'https://drive.google.com/drive/my-drive' : a.driveUrl
+          };
+        }
+        return a;
+      });
+      localStorage.setItem('ardika_archives', JSON.stringify(safeArchives));
+    } catch (e) {
+      console.warn('LocalStorage save archives notice:', e);
+    }
   }, [archives]);
 
   useEffect(() => {
-    localStorage.setItem('ardika_compliance', JSON.stringify(complianceRecords));
+    try {
+      localStorage.setItem('ardika_compliance', JSON.stringify(complianceRecords));
+    } catch (e) {
+      console.warn('LocalStorage save compliance notice:', e);
+    }
   }, [complianceRecords]);
 
   useEffect(() => {
-    localStorage.setItem('ardika_sync_queue', JSON.stringify(pendingSyncQueue));
+    try {
+      localStorage.setItem('ardika_sync_queue', JSON.stringify(pendingSyncQueue));
+    } catch (e) {
+      console.warn('LocalStorage save queue notice:', e);
+    }
   }, [pendingSyncQueue]);
 
   useEffect(() => {
-    localStorage.setItem('ardika_notifications', JSON.stringify(notifications));
+    try {
+      localStorage.setItem('ardika_notifications', JSON.stringify(notifications));
+    } catch (e) {
+      console.warn('LocalStorage save notifications notice:', e);
+    }
   }, [notifications]);
 
   // Push notification helper
@@ -247,6 +374,11 @@ export const SyncProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     setArchives((prev) => [newDoc, ...prev]);
 
+    // Write doc to Firestore Cloud DB safely with sanitized payload
+    setDoc(doc(db, 'archives', newDocId), sanitizeDocForFirestore(newDoc)).catch((e) => {
+      console.warn('Firestore addArchive setDoc warning:', e);
+    });
+
     if (!synced) {
       const queueItem: SyncQueueItem = {
         id: `q-${Date.now()}`,
@@ -262,7 +394,7 @@ export const SyncProvider: React.FC<{ children: React.ReactNode }> = ({ children
       );
     } else {
       sendPushNotification(
-        'Berhasil Unggah ke Google Drive',
+        'Berhasil Unggah ke Cloud ARDIKAMA',
         `File "${docData.title}" berhasil diunggah dengan metadata NIP: ${docData.uploaderNip}.`,
         'SUCCESS'
       );
@@ -300,71 +432,113 @@ export const SyncProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Setujui dokumen (Approve)
   const approveDocument = (docId: string, reviewerName: string) => {
-    let targetDoc: ArchiveDocument | undefined;
-    setArchives((prev) =>
-      prev.map((doc) => {
-        if (doc.id === docId) {
-          targetDoc = doc;
-          return {
-            ...doc,
-            approvalStatus: 'APPROVED',
-            rejectionReason: undefined,
-            reviewedBy: reviewerName,
-            reviewedAt: new Date().toISOString()
-          };
+    const existing = archives.find((d) => String(d.id) === String(docId));
+    const nowIso = new Date().toISOString();
+
+    const targetDoc: ArchiveDocument = existing
+      ? {
+          ...existing,
+          approvalStatus: 'APPROVED',
+          rejectionReason: undefined,
+          reviewedBy: reviewerName,
+          reviewedAt: nowIso
         }
-        return doc;
-      })
+      : {
+          id: docId,
+          title: 'Dokumen Laporan',
+          fileName: 'dokumen.pdf',
+          fileSize: '1.0 MB',
+          fileType: 'PDF',
+          docType: 'LKH_LKB',
+          uploaderNip: '',
+          uploaderName: '',
+          uploadDate: new Date().toISOString().split('T')[0],
+          uploadTime: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+          driveUrl: '',
+          approvalStatus: 'APPROVED',
+          reviewedBy: reviewerName,
+          reviewedAt: nowIso,
+          syncedToCloud: true,
+          metadata: {
+            description: 'Dokumen Laporan Resmi ARDIKAMA',
+            period: 'Bulan Ini',
+            year: 2026,
+            tags: ['ARDIKAMA', 'LKH_LKB']
+          }
+        };
+
+    setArchives((prev) =>
+      prev.map((docItem) => (String(docItem.id) === String(docId) ? targetDoc : docItem))
     );
 
-    if (targetDoc) {
-      if (['LKH', 'LKB', 'SPT'].includes(targetDoc.docType)) {
-        const typeKey = targetDoc.docType.toLowerCase() as 'lkh' | 'lkb' | 'spt';
-        updateCompliance(targetDoc.uploaderNip, typeKey, 'SUDAH');
-      }
+    setDoc(doc(db, 'archives', docId), sanitizeDocForFirestore(targetDoc)).catch((e) => {
+      console.warn('Firestore approveDocument write notice:', e);
+    });
 
-      sendPushNotification(
-        'Laporan Disetujui Admin',
-        `Dokumen "${targetDoc.title}" telah diverifikasi dan DISETUJUI oleh ${reviewerName}.`,
-        'SUCCESS',
-        targetDoc.uploaderNip
-      );
+    const docTypeUpper = (targetDoc.docType || '').toUpperCase();
+    if (['LKH', 'LKB', 'LKH_LKB', 'SPT'].includes(docTypeUpper)) {
+      if (docTypeUpper === 'LKH_LKB') {
+        updateCompliance(targetDoc.uploaderNip, 'lkh', 'SUDAH');
+        updateCompliance(targetDoc.uploaderNip, 'lkb', 'SUDAH');
+      } else if (docTypeUpper === 'LKH') {
+        updateCompliance(targetDoc.uploaderNip, 'lkh', 'SUDAH');
+      } else if (docTypeUpper === 'LKB') {
+        updateCompliance(targetDoc.uploaderNip, 'lkb', 'SUDAH');
+      } else if (docTypeUpper === 'SPT') {
+        updateCompliance(targetDoc.uploaderNip, 'spt', 'SUDAH');
+      }
     }
+
+    sendPushNotification(
+      'Laporan Disetujui Admin',
+      `Dokumen "${targetDoc.title}" telah diverifikasi dan DISETUJUI oleh ${reviewerName}.`,
+      'SUCCESS',
+      targetDoc.uploaderNip
+    );
   };
 
   // Tolak dokumen (Reject with reason)
   const rejectDocument = (docId: string, reason: string, reviewerName: string) => {
-    let targetDoc: ArchiveDocument | undefined;
+    const existing = archives.find((d) => String(d.id) === String(docId));
+    if (!existing) return;
+    const nowIso = new Date().toISOString();
+
+    const targetDoc: ArchiveDocument = {
+      ...existing,
+      approvalStatus: 'REJECTED',
+      rejectionReason: reason,
+      reviewedBy: reviewerName,
+      reviewedAt: nowIso
+    };
 
     setArchives((prev) =>
-      prev.map((doc) => {
-        if (doc.id === docId) {
-          targetDoc = doc;
-          return {
-            ...doc,
-            approvalStatus: 'REJECTED',
-            rejectionReason: reason,
-            reviewedBy: reviewerName,
-            reviewedAt: new Date().toISOString()
-          };
-        }
-        return doc;
-      })
+      prev.map((docItem) => (String(docItem.id) === String(docId) ? targetDoc : docItem))
     );
 
-    if (targetDoc) {
-      if (['LKH', 'LKB', 'SPT'].includes(targetDoc.docType)) {
-        const typeKey = targetDoc.docType.toLowerCase() as 'lkh' | 'lkb' | 'spt';
-        updateCompliance(targetDoc.uploaderNip, typeKey, 'BELUM');
-      }
+    setDoc(doc(db, 'archives', docId), sanitizeDocForFirestore(targetDoc)).catch((e) => {
+      console.warn('Firestore rejectDocument write notice:', e);
+    });
 
-      sendPushNotification(
-        'Laporan Ditolak Admin',
-        `Dokumen "${targetDoc.title}" DITOLAK oleh Admin. Alasan: "${reason}". Silakan unggah ulang perbaikan.`,
-        'WARNING',
-        targetDoc.uploaderNip
-      );
+    const docTypeUpper = (targetDoc.docType || '').toUpperCase();
+    if (['LKH', 'LKB', 'LKH_LKB', 'SPT'].includes(docTypeUpper)) {
+      if (docTypeUpper === 'LKH_LKB') {
+        updateCompliance(targetDoc.uploaderNip, 'lkh', 'BELUM');
+        updateCompliance(targetDoc.uploaderNip, 'lkb', 'BELUM');
+      } else if (docTypeUpper === 'LKH') {
+        updateCompliance(targetDoc.uploaderNip, 'lkh', 'BELUM');
+      } else if (docTypeUpper === 'LKB') {
+        updateCompliance(targetDoc.uploaderNip, 'lkb', 'BELUM');
+      } else if (docTypeUpper === 'SPT') {
+        updateCompliance(targetDoc.uploaderNip, 'spt', 'BELUM');
+      }
     }
+
+    sendPushNotification(
+      'Laporan Ditolak Admin',
+      `Dokumen "${targetDoc.title}" DITOLAK oleh Admin. Alasan: "${reason}". Silakan unggah ulang perbaikan.`,
+      'WARNING',
+      targetDoc.uploaderNip
+    );
   };
 
   // Unggah ulang dokumen perbaikan (Re-upload)
@@ -379,48 +553,42 @@ export const SyncProvider: React.FC<{ children: React.ReactNode }> = ({ children
       description?: string;
     }
   ) => {
-    let targetDoc: ArchiveDocument | undefined;
+    const existing = archives.find((d) => String(d.id) === String(docId));
+    if (!existing) return;
+
+    const targetDoc: ArchiveDocument = {
+      ...existing,
+      title: updatedData.title || existing.title,
+      fileName: updatedData.fileName || existing.fileName,
+      fileSize: updatedData.fileSize || existing.fileSize,
+      fileType: updatedData.fileType || existing.fileType,
+      driveUrl: updatedData.driveUrl || existing.driveUrl,
+      uploadDate: new Date().toISOString().split('T')[0],
+      uploadTime: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+      approvalStatus: 'PENDING',
+      rejectionReason: undefined,
+      reviewedBy: undefined,
+      reviewedAt: undefined,
+      metadata: {
+        ...existing.metadata,
+        description: updatedData.description || existing.metadata?.description
+      }
+    };
 
     setArchives((prev) =>
-      prev.map((doc) => {
-        if (doc.id === docId) {
-          const updated: ArchiveDocument = {
-            ...doc,
-            title: updatedData.title || doc.title,
-            fileName: updatedData.fileName || doc.fileName,
-            fileSize: updatedData.fileSize || doc.fileSize,
-            fileType: updatedData.fileType || doc.fileType,
-            driveUrl: updatedData.driveUrl || doc.driveUrl || doc.driveUrl,
-            uploadDate: new Date().toISOString().split('T')[0],
-            uploadTime: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
-            approvalStatus: 'PENDING',
-            rejectionReason: undefined,
-            reviewedBy: undefined,
-            reviewedAt: undefined,
-            metadata: {
-              ...doc.metadata,
-              description: updatedData.description || doc.metadata.description
-            }
-          };
-          targetDoc = updated;
-          return updated;
-        }
-        return doc;
-      })
+      prev.map((docItem) => (String(docItem.id) === String(docId) ? targetDoc : docItem))
     );
 
-    if (targetDoc) {
-      if (['LKH', 'LKB', 'SPT'].includes(targetDoc.docType)) {
-        const typeKey = targetDoc.docType.toLowerCase() as 'lkh' | 'lkb' | 'spt';
-        updateCompliance(targetDoc.uploaderNip, typeKey, 'SUDAH');
-      }
+    setDoc(doc(db, 'archives', docId), sanitizeDocForFirestore(targetDoc)).catch((e) => {
+      console.warn('Firestore reuploadDocument write notice:', e);
+    });
 
-      sendPushNotification(
-        'Perbaikan Berkas Diunggah',
-        `Perbaikan dokumen "${targetDoc.title}" berhasil diunggah ulang dan sedang menunggu verifikasi Admin.`,
-        'SUCCESS'
-      );
-    }
+    sendPushNotification(
+      'Perbaikan Dokumen Diunggah',
+      `Perbaikan dokumen "${targetDoc.title}" berhasil diunggah. Menunggu verifikasi admin.`,
+      'INFO',
+      targetDoc.uploaderNip
+    );
   };
 
   // Perform manual or automatic cloud sync

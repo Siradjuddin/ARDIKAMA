@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useSync } from '../context/SyncContext';
 import { EMPLOYEES_DATA } from '../data/employees';
+import { openDocumentLink } from '../utils/formatters';
 import {
   Calendar as CalendarIcon,
   ChevronLeft,
@@ -230,14 +231,12 @@ export const CalendarView: React.FC = () => {
                     </p>
                   </div>
 
-                  <a
-                    href={doc.driveUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 hover:underline block pt-1"
+                  <button
+                    onClick={() => openDocumentLink(doc.driveUrl, doc.fileName)}
+                    className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 hover:underline block pt-1 text-left"
                   >
-                    Buka Google Drive →
-                  </a>
+                    {doc.driveUrl?.startsWith('http') ? 'Buka Google Drive →' : 'Buka Berkas →'}
+                  </button>
                 </div>
               ))
             )}

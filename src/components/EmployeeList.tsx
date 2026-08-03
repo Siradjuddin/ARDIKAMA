@@ -63,8 +63,8 @@ export const EmployeeList: React.FC = () => {
     const matchesASN = asnFilter === 'SEMUA' || empASNStatus === asnFilter;
 
     const matchesSearch =
-      emp.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      emp.nip.includes(searchQuery);
+      (emp?.name || '').toLowerCase().includes((searchQuery || '').toLowerCase()) ||
+      (emp?.nip || '').includes(searchQuery || '');
 
     return matchesRole && matchesASN && matchesSearch;
   });

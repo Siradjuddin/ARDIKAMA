@@ -324,9 +324,9 @@ export const ActiveInactiveArchives: React.FC = () => {
     .filter((item) => item.archiveType === currentSubTab)
     .filter((item) => selectedCategory === 'Semua' || item.category === selectedCategory)
     .filter((item) =>
-      item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.codeNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.description.toLowerCase().includes(searchQuery.toLowerCase())
+      (item?.title || '').toLowerCase().includes((searchQuery || '').toLowerCase()) ||
+      (item?.codeNumber || '').toLowerCase().includes((searchQuery || '').toLowerCase()) ||
+      (item?.description || '').toLowerCase().includes((searchQuery || '').toLowerCase())
     );
 
   const activeCount = archiveItems.filter((i) => i.archiveType === 'AKTIF').length;

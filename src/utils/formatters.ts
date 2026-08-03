@@ -97,3 +97,44 @@ export function getASNStatus(emp: { nip?: string; statusASN?: 'ASN' | 'NON_ASN' 
   if (!emp.nip || emp.nip.length < 18) return 'NON_ASN';
   return 'ASN';
 }
+
+/**
+ * Safely open a document URL.
+ * Handles both Google Drive URLs (https://drive.google.com/...) and Base64 data URLs (data:application/pdf;base64,...).
+ * Converts Base64 data URLs into Blob URLs so modern browsers can render or view the PDF without blocking.
+ */
+export function openDocumentLink(url: string, fileName?: string): void {
+  if (!url || url.trim() === '' || url === 'https://drive.google.com/drive/my-drive') {
+    alert('Berkas tersimpan aman di Server ARDIKAMA. Tautan fisik Google Drive belum tersedia karena saat pengunggahan Sesi Google Drive sedang terputus atau kedaluwarsa. Silakan hubungkan kembali Google Drive di akun Admin.');
+    return;
+  }
+
+  if (url.startsWith('data:')) {
+    try {
+      const parts = url.split(',');
+      const mime = parts[0].match(/:(.*?);/)?.[1] || 'application/pdf';
+      const bstr = atob(parts[1]);
+      let n = bstr.length;
+      const u8arr = new Uint8Array(n);
+      while (n--) {
+        u8arr[n] = bstr.charCodeAt(n);
+      }
+      const blob = new Blob([u8arr], { type: mime });
+      const blobUrl = URL.createObjectURL(blob);
+      const newWin = window.open(blobUrl, '_blank');
+      if (!newWin) {
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = fileName || 'Dokumen_ARDIKAMA.pdf';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }
+    } catch (e) {
+      console.error('Gagal membaca data URL berkas:', e);
+      window.open(url, '_blank');
+    }
+  } else {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+}

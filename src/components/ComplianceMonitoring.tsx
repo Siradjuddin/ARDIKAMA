@@ -47,17 +47,25 @@ export const ComplianceMonitoring: React.FC<ComplianceMonitoringProps> = ({
   const activeYear = selectedDate.substring(0, 4);
 
   const fullList = allEmployees.map((emp) => {
-    const rec = complianceRecords.find((r) => r.employeeNip === emp.nip);
+    const rec = complianceRecords.find((r) => (r.employeeNip || '').trim() === (emp.nip || '').trim());
 
     // Check real-time approved docs in archives
-    const hasApprovedDoc = archives.some((a) =>
-      a.uploaderNip === emp.nip &&
-      a.approvalStatus === 'APPROVED' &&
-      (docFilter === 'lkh_lkb'
-        ? (a.docType === 'LKH' || a.docType === 'LKB' || a.docType === 'LKH_LKB') &&
-          (a.uploadDate ? a.uploadDate.startsWith(activeMonth) : false)
-        : a.docType === 'SPT' && (a.uploadDate ? a.uploadDate.startsWith(activeYear) : false))
-    );
+    const hasApprovedDoc = archives.some((a) => {
+      const matchOwner = (a.uploaderNip || '').trim() === (emp.nip || '').trim();
+      if (!matchOwner || a.approvalStatus !== 'APPROVED') return false;
+
+      const uDate = a.uploadDate || '';
+      const docTypeUpper = (a.docType || '').toUpperCase();
+      if (docFilter === 'lkh_lkb') {
+        const isLkhLkb = docTypeUpper === 'LKH' || docTypeUpper === 'LKB' || docTypeUpper === 'LKH_LKB';
+        const matchMonth = !uDate || uDate.startsWith(activeMonth) || uDate.includes(activeMonth);
+        return isLkhLkb && matchMonth;
+      } else {
+        const isSpt = docTypeUpper === 'SPT';
+        const matchYear = !uDate || uDate.startsWith(activeYear) || uDate.includes(activeYear);
+        return isSpt && matchYear;
+      }
+    });
 
     const recStatus = rec
       ? docFilter === 'lkh_lkb'
@@ -67,14 +75,22 @@ export const ComplianceMonitoring: React.FC<ComplianceMonitoringProps> = ({
 
     const status = hasApprovedDoc ? 'SUDAH' : recStatus;
 
-    const isPending = archives.some((a) =>
-      a.uploaderNip === emp.nip &&
-      a.approvalStatus === 'PENDING' &&
-      (docFilter === 'lkh_lkb'
-        ? (a.docType === 'LKH' || a.docType === 'LKB' || a.docType === 'LKH_LKB') &&
-          (a.uploadDate ? a.uploadDate.startsWith(activeMonth) : false)
-        : a.docType === 'SPT' && (a.uploadDate ? a.uploadDate.startsWith(activeYear) : false))
-    );
+    const isPending = archives.some((a) => {
+      const matchOwner = (a.uploaderNip || '').trim() === (emp.nip || '').trim();
+      if (!matchOwner || a.approvalStatus !== 'PENDING') return false;
+
+      const uDate = a.uploadDate || '';
+      const docTypeUpper = (a.docType || '').toUpperCase();
+      if (docFilter === 'lkh_lkb') {
+        const isLkhLkb = docTypeUpper === 'LKH' || docTypeUpper === 'LKB' || docTypeUpper === 'LKH_LKB';
+        const matchMonth = !uDate || uDate.startsWith(activeMonth) || uDate.includes(activeMonth);
+        return isLkhLkb && matchMonth;
+      } else {
+        const isSpt = docTypeUpper === 'SPT';
+        const matchYear = !uDate || uDate.startsWith(activeYear) || uDate.includes(activeYear);
+        return isSpt && matchYear;
+      }
+    });
 
     return {
       ...emp,
@@ -92,8 +108,8 @@ export const ComplianceMonitoring: React.FC<ComplianceMonitoringProps> = ({
       (statusFilter === 'BELUM' && emp.status === 'BELUM');
 
     const matchesSearch =
-      emp.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      emp.nip.includes(searchQuery);
+      (emp?.name || '').toLowerCase().includes((searchQuery || '').toLowerCase()) ||
+      (emp?.nip || '').includes(searchQuery || '');
 
     return matchesStatus && matchesSearch;
   });

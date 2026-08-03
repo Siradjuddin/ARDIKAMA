@@ -1,6 +1,6 @@
 import { initializeApp, getApps } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, User } from 'firebase/auth';
-import { getFirestore, doc, setDoc, getDoc, onSnapshot } from 'firebase/firestore';
+import { getFirestore, doc, setDoc, getDoc, getDocFromServer, onSnapshot } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 // Reuse existing Firebase app or initialize
@@ -10,8 +10,8 @@ export const db = getFirestore(app);
 
 const provider = new GoogleAuthProvider();
 provider.addScope('https://www.googleapis.com/auth/drive.file');
-// Force Google to show account selection prompt so user can pick arsipdigitalmempawah@gmail.com
-provider.setCustomParameters({ prompt: 'select_account' });
+// Force Google to show account selection prompt and consent so user always grants drive.file scope
+provider.setCustomParameters({ prompt: 'select_account consent', access_type: 'online' });
 
 // Retrieve cached token from localStorage if available
 let cachedAccessToken: string | null = localStorage.getItem('ardika_gdrive_token') || localStorage.getItem('ardika_shared_gdrive_token');
@@ -19,18 +19,28 @@ let isSigningIn = false;
 
 // Realtime listener for shared Google Drive credentials across all users/browsers
 try {
-  onSnapshot(doc(db, 'settings', 'gdrive'), (snapshot) => {
-    if (snapshot.exists()) {
-      const data = snapshot.data();
-      if (data?.accessToken) {
-        cachedAccessToken = data.accessToken;
-        localStorage.setItem('ardika_shared_gdrive_token', data.accessToken);
-        if (data.driveEmail) {
-          localStorage.setItem('ardika_shared_gdrive_email', data.driveEmail);
+  onSnapshot(
+    doc(db, 'settings', 'gdrive'),
+    (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        if (data?.accessToken && !data?.expired) {
+          cachedAccessToken = data.accessToken;
+          localStorage.setItem('ardika_shared_gdrive_token', data.accessToken);
+          if (data.driveEmail) {
+            localStorage.setItem('ardika_shared_gdrive_email', data.driveEmail);
+          }
+        } else {
+          cachedAccessToken = null;
+          localStorage.removeItem('ardika_gdrive_token');
+          localStorage.removeItem('ardika_shared_gdrive_token');
         }
       }
+    },
+    (err) => {
+      console.warn('Firestore GDrive listener notice:', err);
     }
-  });
+  );
 } catch (err) {
   console.warn('Firestore GDrive listener notice:', err);
 }
@@ -85,7 +95,8 @@ export const connectGoogleDrive = async (): Promise<{ user: User; accessToken: s
       await setDoc(doc(db, 'settings', 'gdrive'), {
         accessToken: cachedAccessToken,
         driveEmail: driveEmail,
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date().toISOString(),
+        expired: false
       });
     } catch (fsErr) {
       console.warn('Could not persist GDrive token to Firestore:', fsErr);
@@ -154,25 +165,35 @@ export const getCachedAccessToken = (): string | null => {
 };
 
 export const getCachedAccessTokenAsync = async (): Promise<string | null> => {
-  let token = getCachedAccessToken();
-  if (token) return token;
-
   try {
-    const snap = await getDoc(doc(db, 'settings', 'gdrive'));
-    if (snap.exists()) {
+    let snap;
+    try {
+      snap = await getDocFromServer(doc(db, 'settings', 'gdrive'));
+    } catch {
+      snap = await getDoc(doc(db, 'settings', 'gdrive'));
+    }
+    if (snap && snap.exists()) {
       const data = snap.data();
-      if (data?.accessToken) {
+      if (data?.accessToken && !data?.expired) {
         cachedAccessToken = data.accessToken;
         localStorage.setItem('ardika_shared_gdrive_token', data.accessToken);
         if (data.driveEmail) {
           localStorage.setItem('ardika_shared_gdrive_email', data.driveEmail);
         }
         return cachedAccessToken;
+      } else {
+        cachedAccessToken = null;
+        localStorage.removeItem('ardika_gdrive_token');
+        localStorage.removeItem('ardika_shared_gdrive_token');
+        return null;
       }
     }
   } catch (e) {
     console.warn('Firestore token check notice:', e);
   }
+
+  let token = getCachedAccessToken();
+  if (token) return token;
 
   return null;
 };
@@ -376,12 +397,13 @@ export const uploadFileToDrive = async (
         (err.message.includes('401') || err.message.includes('UNAUTHENTICATED') || err.message.includes('Invalid Credentials')));
 
     if (is401) {
-      // Access token expired - clear stale token without showing popup to standard employees
+      // Access token expired - clear local cache only so we do not overwrite or destroy Admin's token in Firestore
       folderCacheMap.clear();
       cachedAccessToken = null;
       localStorage.removeItem('ardika_gdrive_token');
       localStorage.removeItem('ardika_shared_gdrive_token');
-      throw new Error('TOKEN_EXPIRED: Token Google Drive Kemenag sudah kedaluwarsa. Berkas disimpan di Server ARDIKAMA Kemenag.');
+
+      throw new Error('TOKEN_EXPIRED: Token Google Drive Kemenag perlu diperbarui oleh Admin. Berkas tersimpan aman di Server ARDIKAMA Kemenag.');
     }
     if (typeof err?.message === 'string') {
       const msg = err.message;

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useSync } from '../context/SyncContext';
 import { ArchiveDocument, FileCategory } from '../types';
-import { maskNip } from '../utils/formatters';
+import { maskNip, openDocumentLink } from '../utils/formatters';
 import { RejectReasonModal } from './RejectReasonModal';
 import {
   AlertTriangle,
@@ -49,9 +49,16 @@ export const ArchiveHistory: React.FC<ArchiveHistoryProps> = ({ onOpenUploadModa
   const filteredArchives = archives.filter((doc) => {
     // Privacy filter: Non-admin users ONLY see THEIR OWN uploaded documents
     if (!isAdmin) {
-      const isOwner = currentUser && (
-        doc.uploaderNip === currentUser.nip ||
-        doc.uploaderName.toLowerCase().trim() === currentUser.name.toLowerCase().trim()
+      const uploaderNip = doc?.uploaderNip || '';
+      const uploaderName = (doc?.uploaderName || '').toLowerCase().trim();
+      const currentNip = currentUser?.nip || '';
+      const currentName = (currentUser?.name || '').toLowerCase().trim();
+
+      const isOwner = Boolean(
+        currentUser && (
+          (uploaderNip && currentNip && uploaderNip === currentNip) ||
+          (uploaderName && currentName && uploaderName === currentName)
+        )
       );
       if (!isOwner) {
         return false;
@@ -60,10 +67,10 @@ export const ArchiveHistory: React.FC<ArchiveHistoryProps> = ({ onOpenUploadModa
 
     const matchesCategory = selectedCategory === 'SEMUA' || doc.fileType === selectedCategory;
     const matchesSearch =
-      doc.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      doc.uploaderName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      doc.uploaderNip.includes(searchQuery) ||
-      doc.fileName.toLowerCase().includes(searchQuery.toLowerCase());
+      (doc?.title || '').toLowerCase().includes((searchQuery || '').toLowerCase()) ||
+      (doc?.uploaderName || '').toLowerCase().includes((searchQuery || '').toLowerCase()) ||
+      (doc?.uploaderNip || '').includes(searchQuery || '') ||
+      (doc?.fileName || '').toLowerCase().includes((searchQuery || '').toLowerCase());
 
     return matchesCategory && matchesSearch;
   });
@@ -288,15 +295,13 @@ export const ArchiveHistory: React.FC<ArchiveHistoryProps> = ({ onOpenUploadModa
                     <span>Detail</span>
                   </button>
 
-                  <a
-                    href={doc.driveUrl}
-                    target="_blank"
-                    rel="noreferrer"
+                  <button
+                    onClick={() => openDocumentLink(doc.driveUrl, doc.fileName)}
                     className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-sm"
                   >
                     <ExternalLink className="w-3.5 h-3.5" />
-                    <span>Buka Drive</span>
-                  </a>
+                    <span>{doc.driveUrl?.startsWith('http') ? 'Buka Drive' : 'Buka Berkas'}</span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -352,15 +357,13 @@ export const ArchiveHistory: React.FC<ArchiveHistoryProps> = ({ onOpenUploadModa
               </div>
 
               <div>
-                <span className="text-slate-400 block">Google Drive Link:</span>
-                <a
-                  href={previewDoc.driveUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-blue-600 dark:text-blue-400 font-mono underline break-all block mt-0.5"
+                <span className="text-slate-400 block">Link Akses Dokumen:</span>
+                <button
+                  onClick={() => openDocumentLink(previewDoc.driveUrl, previewDoc.fileName)}
+                  className="text-blue-600 dark:text-blue-400 font-mono underline break-all block mt-0.5 text-left hover:text-blue-700"
                 >
-                  {previewDoc.driveUrl}
-                </a>
+                  {previewDoc.driveUrl?.startsWith('http') ? previewDoc.driveUrl : 'Lihat / Unduh Berkas Tersimpan'}
+                </button>
               </div>
             </div>
 

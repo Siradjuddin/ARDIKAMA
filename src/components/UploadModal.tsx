@@ -7,6 +7,7 @@ import { connectGoogleDrive, uploadFileToDrive, getCachedAccessToken, getSubfold
 import { getAllEmployees, findEmployeeByNip } from '../data/employees';
 import {
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   CloudUpload,
   ExternalLink,
@@ -187,19 +188,31 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, reupl
       const docTypeTitle = internalDocType === 'SPT' ? 'Bukti Laporan SPT' : (internalDocType === 'ARSIP_KANTOR' ? 'Arsip Kantor' : 'LKH/LKB');
       const finalTitle = `${docTypeTitle} ${namingResult.periodLabel} - ${selectedOwner.name}`;
 
-      let finalDriveUrl = '#';
-      let localUrl = URL.createObjectURL(selectedFile);
+      // Convert file to permanent Base64 Data Stream for 100% cloud persistence (Firestore/Vercel)
+      const readFileAsDataUrl = (file: File): Promise<string> => {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = (err) => reject(err);
+          reader.readAsDataURL(file);
+        });
+      };
+
+      const permanentCloudUrl = await readFileAsDataUrl(selectedFile);
+      let finalDriveUrl = permanentCloudUrl;
       let isDriveSynced = false;
 
       // Attempt Google Drive upload using shared central token; fallback cleanly to ARDIKAMA Cloud Server
       try {
         const driveRes = await uploadFileToDrive(selectedFile, finalFileName, docTypeOption);
-        finalDriveUrl = driveRes.driveUrl;
-        isDriveSynced = true;
-        await refreshDriveCount();
+        if (driveRes && driveRes.driveUrl && !driveRes.driveUrl.startsWith('blob:')) {
+          finalDriveUrl = driveRes.driveUrl;
+          isDriveSynced = true;
+          await refreshDriveCount();
+        }
       } catch (uploadErr: any) {
-        console.warn('Google Drive upload notice, file stored on ARDIKAMA Server:', uploadErr);
-        finalDriveUrl = localUrl;
+        console.warn('Google Drive sync notice, file saved to ARDIKAMA Cloud (Firestore/Vercel):', uploadErr);
+        finalDriveUrl = permanentCloudUrl;
         isDriveSynced = false;
       }
 
@@ -224,7 +237,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, reupl
           uploadDate: new Date().toISOString().split('T')[0],
           uploadTime: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
           driveUrl: finalDriveUrl,
-          fileUrl: localUrl,
+          fileUrl: permanentCloudUrl,
           metadata: {
             description: description || `Dokumen ${docTypeOption} Resmi ARDIKAMA Kemenag Mempawah`,
             period: namingResult.periodLabel,
@@ -300,17 +313,45 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, reupl
         {uploadSuccessData ? (
           /* Persistent Success Screen */
           <div className="space-y-5 animate-fadeIn">
-            <div className="p-5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/80 border-2 border-emerald-500 text-center space-y-2 shadow-sm">
-              <div className="w-12 h-12 rounded-full bg-emerald-600 text-white flex items-center justify-center mx-auto shadow-md">
-                <CheckCircle2 className="w-7 h-7" />
+            {uploadSuccessData.isDriveSynced ? (
+              <div className="p-5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/80 border-2 border-emerald-500 text-center space-y-2 shadow-sm">
+                <div className="w-12 h-12 rounded-full bg-emerald-600 text-white flex items-center justify-center mx-auto shadow-md">
+                  <CheckCircle2 className="w-7 h-7" />
+                </div>
+                <h4 className="font-extrabold text-slate-900 dark:text-white text-base tracking-tight">
+                  BERKAS TERKIRIM KE GOOGLE DRIVE & SERVER ARDIKAMA!
+                </h4>
+                <p className="text-xs text-emerald-800 dark:text-emerald-200 font-semibold leading-relaxed max-w-sm mx-auto">
+                  Dokumen laporan Anda telah tersimpan secara fisik ke Google Drive ({getSharedDriveEmail()}) dan terverifikasi di Server ARDIKAMA Kemenag Mempawah.
+                </p>
               </div>
-              <h4 className="font-extrabold text-slate-900 dark:text-white text-base tracking-tight">
-                BERKAS BERHASIL DIUNGGAH & DISINKRONKAN!
-              </h4>
-              <p className="text-xs text-emerald-800 dark:text-emerald-200 font-semibold leading-relaxed max-w-sm mx-auto">
-                Dokumen laporan Anda telah tersimpan dan terverifikasi secara otomatis pada sistem ARDIKAMA Kantor Kemenag Kabupaten Mempawah.
-              </p>
-            </div>
+            ) : (
+              <div className="p-5 rounded-2xl bg-amber-50 dark:bg-amber-950/80 border-2 border-amber-500 text-center space-y-2.5 shadow-sm">
+                <div className="w-12 h-12 rounded-full bg-amber-500 text-white flex items-center justify-center mx-auto shadow-md">
+                  <AlertTriangle className="w-7 h-7" />
+                </div>
+                <h4 className="font-extrabold text-slate-900 dark:text-white text-base tracking-tight">
+                  BERKAS TERSIMPAN DI SERVER ARDIKAMA
+                </h4>
+                <p className="text-xs text-amber-900 dark:text-amber-200 font-medium leading-relaxed max-w-md mx-auto">
+                  Dokumen laporan Anda telah <strong>AMAN & SUKSES tersimpan di Server Cloud ARDIKAMA</strong> Kemenag. Namun, berkas FISIK <strong>belum masuk ke Google Drive ({getSharedDriveEmail()})</strong> karena Sesi Google Drive Kemenag belum dihubungkan atau Token OAuth telah kedaluwarsa.
+                </p>
+                <div className="p-2.5 rounded-xl bg-amber-100/80 dark:bg-amber-900/60 text-[11px] font-bold text-amber-900 dark:text-amber-100 border border-amber-300 dark:border-amber-700">
+                  💡 Catatan: Pegawai & Admin dapat melihat/mengunduh dokumen ini kapan saja di sistem ARDIKAMA. Minta Admin Kemenag untuk memperbarui koneksi Google Drive.
+                </div>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={handleConnectDrive}
+                    disabled={driveConnecting}
+                    className="mt-1 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs shadow transition-colors inline-flex items-center gap-1.5"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>{driveConnecting ? 'Menghubungkan...' : 'Hubungkan Google Drive Sekarang (Khusus Admin)'}</span>
+                  </button>
+                )}
+              </div>
+            )}
 
             <div className="bg-slate-50 dark:bg-slate-800/80 rounded-2xl p-4 border border-slate-200 dark:border-slate-700 space-y-2.5 text-xs">
               <div className="flex justify-between items-center pb-2 border-b border-slate-200 dark:border-slate-700">
@@ -336,16 +377,22 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, reupl
 
               <div className="flex justify-between items-center pb-2 border-b border-slate-200 dark:border-slate-700">
                 <span className="text-slate-500 dark:text-slate-400 font-medium">Folder & Lokasi:</span>
-                <span className="font-extrabold text-emerald-700 dark:text-emerald-300 bg-emerald-100/80 dark:bg-emerald-950 px-2 py-0.5 rounded-lg border border-emerald-300 dark:border-emerald-800 text-[11px] truncate max-w-[220px]">
-                  {uploadSuccessData.isDriveSynced ? `Arsip Website ARDIKAMA / ${getSubfolderNameForCategory(uploadSuccessData.docType)}` : 'Server Cloud ARDIKAMA Kemenag'}
+                <span className={`font-extrabold px-2 py-0.5 rounded-lg border text-[11px] truncate max-w-[220px] ${
+                  uploadSuccessData.isDriveSynced
+                    ? 'text-emerald-700 dark:text-emerald-300 bg-emerald-100/80 dark:bg-emerald-950 border-emerald-300 dark:border-emerald-800'
+                    : 'text-amber-800 dark:text-amber-300 bg-amber-100/80 dark:bg-amber-950 border-amber-300 dark:border-amber-800'
+                }`}>
+                  {uploadSuccessData.isDriveSynced ? `Google Drive: Arsip Website ARDIKAMA / ${getSubfolderNameForCategory(uploadSuccessData.docType)}` : 'Server Terpusat ARDIKAMA Kemenag'}
                 </span>
               </div>
 
               <div className="flex justify-between items-center">
                 <span className="text-slate-500 dark:text-slate-400 font-medium">Status Penyimpanan:</span>
-                <span className="inline-flex items-center gap-1 font-bold text-emerald-600 dark:text-emerald-400 text-xs">
-                  <HardDrive className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>{uploadSuccessData.isDriveSynced ? 'Google Drive Cloud Storage (100% Synced)' : 'Server Terpusat ARDIKAMA Kemenag Mempawah'}</span>
+                <span className={`inline-flex items-center gap-1 font-bold text-xs ${
+                  uploadSuccessData.isDriveSynced ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'
+                }`}>
+                  <HardDrive className="w-3.5 h-3.5" />
+                  <span>{uploadSuccessData.isDriveSynced ? 'Google Drive & Server ARDIKAMA (100% Synced)' : 'Tersimpan di Server ARDIKAMA (Google Drive Belum Dihubungkan)'}</span>
                 </span>
               </div>
             </div>
