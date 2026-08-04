@@ -24,7 +24,12 @@ try {
     (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
-        if (data?.accessToken && !data?.expired) {
+        const updatedAt = data?.updatedAt ? new Date(data.updatedAt).getTime() : 0;
+        const now = Date.now();
+        const FIFTY_FIVE_MIN_MS = 55 * 60 * 1000;
+        const isExpiredByTime = updatedAt > 0 && (now - updatedAt) > FIFTY_FIVE_MIN_MS;
+
+        if (data?.accessToken && !data?.expired && !isExpiredByTime) {
           cachedAccessToken = data.accessToken;
           localStorage.setItem('ardika_shared_gdrive_token', data.accessToken);
           if (data.driveEmail) {
@@ -174,7 +179,12 @@ export const getCachedAccessTokenAsync = async (): Promise<string | null> => {
     }
     if (snap && snap.exists()) {
       const data = snap.data();
-      if (data?.accessToken && !data?.expired) {
+      const updatedAt = data?.updatedAt ? new Date(data.updatedAt).getTime() : 0;
+      const now = Date.now();
+      const FIFTY_FIVE_MIN_MS = 55 * 60 * 1000;
+      const isExpiredByTime = updatedAt > 0 && (now - updatedAt) > FIFTY_FIVE_MIN_MS;
+
+      if (data?.accessToken && !data?.expired && !isExpiredByTime) {
         cachedAccessToken = data.accessToken;
         localStorage.setItem('ardika_shared_gdrive_token', data.accessToken);
         if (data.driveEmail) {
@@ -185,6 +195,9 @@ export const getCachedAccessTokenAsync = async (): Promise<string | null> => {
         cachedAccessToken = null;
         localStorage.removeItem('ardika_gdrive_token');
         localStorage.removeItem('ardika_shared_gdrive_token');
+        if (data?.accessToken && !data?.expired && isExpiredByTime) {
+          setDoc(doc(db, 'settings', 'gdrive'), { expired: true }, { merge: true }).catch(() => {});
+        }
         return null;
       }
     }
@@ -397,11 +410,20 @@ export const uploadFileToDrive = async (
         (err.message.includes('401') || err.message.includes('UNAUTHENTICATED') || err.message.includes('Invalid Credentials')));
 
     if (is401) {
-      // Access token expired - clear local cache only so we do not overwrite or destroy Admin's token in Firestore
+      // Access token expired - clear local cache AND set expired: true in Firestore so all devices update status
       folderCacheMap.clear();
       cachedAccessToken = null;
       localStorage.removeItem('ardika_gdrive_token');
       localStorage.removeItem('ardika_shared_gdrive_token');
+
+      try {
+        await setDoc(doc(db, 'settings', 'gdrive'), {
+          expired: true,
+          expiredAt: new Date().toISOString()
+        }, { merge: true });
+      } catch (e) {
+        console.warn('Notice setting expired flag in Firestore:', e);
+      }
 
       throw new Error('TOKEN_EXPIRED: Token Google Drive Kemenag perlu diperbarui oleh Admin. Berkas tersimpan aman di Server ARDIKAMA Kemenag.');
     }
